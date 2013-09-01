@@ -40,8 +40,8 @@ typedef void (*phys_reset_t)(void);
 static DEFINE_SPINLOCK(main_lock);
 void __iomem *myL2CacheBase = NULL;
 /*
-static uint32_t kexec_l2x0_way_mask = (1 << 16 ) - 1;  /* Bitmask of active PL310 ways (on RAZR..) */
-*/
+#static uint32_t kexec_l2x0_way_mask = (1 << 16 ) - 1; */
+
 void flushcachesinit(void);
 void setwayflush(void);
 
