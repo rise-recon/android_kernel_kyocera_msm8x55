@@ -23,21 +23,21 @@ extern unsigned long kexec_indirection_page;
 extern unsigned long kexec_mach_type;
 extern unsigned long kexec_boot_atags;
 
-static atomic_t waiting_for_crash_ipi;
+void (*cpu_reset_phys)(unsigned long int dest);
 
-/*
+static atomic_t waiting_for_crash_ipi;
+ /*
  * Provide a dummy crash_notes definition while crash dump arrives to arm.
  * This prevents breakage of crash_notes attribute in kernel/ksysfs.c.
  */
-
 int machine_kexec_prepare(struct kimage *image)
 {
 	return 0;
-}
+};
 
 void machine_kexec_cleanup(struct kimage *image)
 {
-}
+};
 
 void machine_crash_nonpanic_core(void *unused)
 {
@@ -121,5 +121,15 @@ void machine_kexec(struct kimage *image)
 	cpu_proc_fin();
 	outer_inv_all();
 	flush_cache_all();
+	virt_to_phys(cpu_reset);
+	cpu_reset_phys(reboot_code_buffer_phys);
+/*
 	__virt_to_phys(cpu_reset)(reboot_code_buffer_phys);
+*/
+/*-	cpu_reset(reboot_code_buffer_phys); */
+/*
+* cpu_reset disables the MMU, so branch to its (1-to-1 mapped)
+* physical address not its virtual one.
+*/
 }
+
