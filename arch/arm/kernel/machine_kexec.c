@@ -2,26 +2,89 @@
  * machine_kexec.c - handle transition of Linux booting another kernel
  */
 
+#include <linux/module.h>
 #include <linux/mm.h>
 #include <linux/kexec.h>
 #include <linux/delay.h>
 #include <linux/reboot.h>
 #include <linux/io.h>
+#include <linux/kallsyms.h>
+#include <linux/smp.h>
+#include <linux/uaccess.h>
+#include <linux/cpu.h>
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
 #include <asm/mmu_context.h>
 #include <asm/cacheflush.h>
 #include <asm/mach-types.h>
+#include <asm/kexec.h>
+#include <asm/cputype.h>
+#include <asm/hardware/cache-l2x0.h>
+#include <mach/hardware.h>
 
-extern const unsigned char relocate_new_kernel[];
+
+extern void relocate_new_kernel(void);
 extern const unsigned int relocate_new_kernel_size;
-
-extern void setup_mm_for_reboot(char mode);
 
 extern unsigned long kexec_start_address;
 extern unsigned long kexec_indirection_page;
 extern unsigned long kexec_mach_type;
 extern unsigned long kexec_boot_atags;
+
+void kexec_cpu_proc_fin(void);
+void kexec_cpu_reset(void);
+
+extern void call_with_stack(void (*fn)(void *), void *arg, void *sp);
+typedef void (*phys_reset_t)(void);
+
+static DEFINE_SPINLOCK(main_lock);
+void __iomem *myL2CacheBase = NULL;
+/*
+static uint32_t kexec_l2x0_way_mask = (1 << 16 ) - 1;  /* Bitmask of active PL310 ways (on RAZR..) */
+*/
+void flushcachesinit(void);
+void setwayflush(void);
+
+void pulse(void)
+{
+  asm volatile(
+    "ldr  r3, =0x4a310000    \n\t"
+    "mov  r4, #0x10000000    \n\t"
+    "str  r4, [r3, #0x190]  \n\t"
+    "str  r4, [r3, #0x194]  \n\t"
+    ::: "r3", "r4"
+  );
+}
+
+/*
+ * A temporary stack to use for CPU reset. This is static so that we
+ * don't clobber it with the identity mapping. When running with this
+ * stack, any references to the current task *will not work* so you
+ * should really do as little as possible before jumping to your reset
+ * code.
+ */
+static u32 soft_restart_stack[256];
+
+static void kexec_info(struct kimage *image)
+{
+  int i;
+  printk("kexec information\n");
+  for (i = 0; i < image->nr_segments; i++) {
+          printk("  segment[%d]: 0x%08x - 0x%08x (0x%08x)\n",
+           i,
+           (unsigned int)image->segment[i].mem,
+           (unsigned int)image->segment[i].mem +
+             image->segment[i].memsz,
+           (unsigned int)image->segment[i].memsz);
+  }
+  printk("  start     : 0x%08x\n", (unsigned int)image->start);
+  printk("  atags     : 0x%08x\n", (unsigned int)image->start - KEXEC_ARM_ZIMAGE_OFFSET + KEXEC_ARM_ATAGS_OFFSET);
+  printk("machine_arch_type: %04x\n", machine_arch_type);
+}
+
+
+
+
 
 void (*cpu_reset_phys)(unsigned long int dest);
 
@@ -32,12 +95,15 @@ static atomic_t waiting_for_crash_ipi;
  */
 int machine_kexec_prepare(struct kimage *image)
 {
+	kexec_info(image);
 	return 0;
 };
 
 void machine_kexec_cleanup(struct kimage *image)
 {
 };
+
+EXPORT_SYMBOL(machine_kexec_cleanup);
 
 void machine_crash_nonpanic_core(void *unused)
 {
@@ -132,4 +198,34 @@ void machine_kexec(struct kimage *image)
 * physical address not its virtual one.
 */
 }
+static int __init arm_kexec_init(void)
+{
+  void (*set_cpu_online_ptr)(unsigned int cpu, bool online) = (void *)kallsyms_lookup_name("set_cpu_online");
+  void (*set_cpu_present_ptr)(unsigned int cpu, bool present) = (void *)kallsyms_lookup_name("set_cpu_present");
+  void (*set_cpu_possible_ptr)(unsigned int cpu, bool possible) = (void *)kallsyms_lookup_name("set_cpu_possible");
+  
+  int (*disable_nonboot_cpus)(void) = (void *)kallsyms_lookup_name("disable_nonboot_cpus");
+  int nbcval = 0;
+
+  nbcval = disable_nonboot_cpus();
+  if (nbcval < 0)
+    printk(KERN_INFO "!!!WARNING!!! disable_nonboot_cpus have FAILED!\n \
+          Continuing to boot anyway: something can go wrong!\n");
+
+  set_cpu_online_ptr(1, false);
+  set_cpu_present_ptr(1, false);
+  set_cpu_possible_ptr(1, false);
+
+  return 0;
+}
+
+static void __exit arm_kexec_exit(void)
+{
+}
+
+module_init(arm_kexec_init);
+module_exit(arm_kexec_exit);
+
+EXPORT_SYMBOL(machine_kexec);
+MODULE_LICENSE("GPL");
 
